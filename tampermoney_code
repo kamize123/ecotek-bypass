@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         Auto Next Slide Eco-Tek (v13.1 Log Master)
+// @name         Auto Next Slide Eco-Tek (v14.0 Safety Buffer)
 // @namespace    http://tampermonkey.net/
-// @version      13.1
-// @description  Tự động học: In log thời gian chi tiết & Click khi về 00:00.
+// @version      14.0
+// @description  Tự động học: Đợi thêm 5 giây sau khi hết giờ để Server kịp lưu 100%.
 // @author       Jason & Gemini
 // @match        https://hoclythuyetlaixe.eco-tek.com.vn/*
 // @match        http://hoclythuyetlaixe.eco-tek.com.vn/*
@@ -14,15 +14,20 @@
     'use strict';
 
     // --- CẤU HÌNH ---
-    const CHECK_INTERVAL = 500;   // Kiểm tra mỗi 0.5 giây
-    const COOLDOWN_TIME = 8000;   // Sau khi click, ngủ 8 giây
+    const CHECK_INTERVAL = 500;   // Quét mỗi 0.5 giây
+    const BUFFER_SECONDS = 5;     // QUAN TRỌNG: Đợi thêm 5 giây sau khi về 00:00 rồi mới click
+    const COOLDOWN_TIME = 8000;   // Sau khi click, ngủ 8 giây để tải trang mới
 
-    // BIẾN NỘI BỘ
+    // TÍNH TOÁN NỘI BỘ
+    const REQUIRED_BUFFER_TICKS = (BUFFER_SECONDS * 1000) / CHECK_INTERVAL; // Số lần đếm bù giờ
+    
+    // BIẾN TRẠNG THÁI
     let captured = new Set();
     let hasClicked = false;
-    let lastMax = 99; // Dùng để kiểm tra thay đổi giây
+    let lastMax = 99;
+    let bufferCount = 0; // Đếm thời gian bù giờ
 
-    // 1. HOOK CANVAS (Chạy ngay lập tức để bắt chữ)
+    // 1. HOOK CANVAS
     const originalFillText = CanvasRenderingContext2D.prototype.fillText;
     CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
         if (text && text.toString().trim() !== "") {
@@ -31,44 +36,56 @@
         return originalFillText.apply(this, arguments);
     };
 
-    console.log("%c[Auto-Next] Đã khởi động! Mở Console để xem giờ chạy...", "color: #00ff00; font-weight: bold; font-size: 14px; padding: 5px; border: 1px solid #00ff00;");
+    console.log(`%c[Auto-Next v14] Đã bật chế độ BÙ GIỜ (${BUFFER_SECONDS}s) để fix lỗi 99%!`, "color: #fff; background: purple; font-size: 14px; padding: 5px;");
 
-    // 2. VÒNG LẶP CHÍNH
+    // 2. VÒNG LẶP QUÉT
     setInterval(() => {
-        // Nếu đang nghỉ ngơi (đã click xong) thì bỏ qua
         if (hasClicked) return;
 
-        // Lọc lấy số từ dữ liệu bắt được
         const numbers = Array.from(captured)
             .filter(v => !isNaN(v) && v.toString().trim() !== '')
             .map(v => parseInt(v, 10));
 
-        // Tìm số lớn nhất (Max)
-        // Nếu màn hình trắng trơn (không có số) thì Max = 0
         const currentMax = numbers.length > 0 ? Math.max(...numbers) : 0;
 
-        // --- PHẦN IN LOG THỜI GIAN (Yêu cầu của bạn) ---
-        // Chỉ in khi thời gian thay đổi (để không spam 1000 dòng giống nhau)
+        // In log nếu thời gian thay đổi
         if (numbers.length > 0 && currentMax !== lastMax) {
             console.log(`⏱️ Time: ${numbers.join(" : ")} (Max: ${currentMax})`);
-            lastMax = currentMax; // Cập nhật trạng thái
-        }
-        // -----------------------------------------------
-
-        // --- LOGIC CLICK ---
-        
-        // TRƯỜNG HỢP 1: Về đích chuẩn (Thấy số 0 và Max = 0)
-        if (numbers.length > 0 && currentMax === 0) {
-            doClickNext("Đã về 00:00");
-        }
-        
-        // TRƯỜNG HỢP 2: Số biến mất (00:01 -> Trắng xóa)
-        // Logic: Vừa nãy còn thấy số nhỏ (<=1), giờ không thấy số nào nữa -> Hết giờ
-        else if (numbers.length === 0 && lastMax <= 1 && lastMax >= 0) {
-            doClickNext("Màn hình xóa trắng (Hết giờ)");
+            lastMax = currentMax;
+            
+            // Nếu thời gian nhảy lại lên số lớn (do chuyển slide khác hoặc lỗi), reset bộ đếm bù giờ
+            if (currentMax > 0) {
+                bufferCount = 0;
+            }
         }
 
-        // Dọn dẹp bộ nhớ đệm cho vòng lặp sau
+        // --- LOGIC QUYẾT ĐỊNH ---
+
+        // Điều kiện: Mọi thứ về 0 HOẶC Màn hình trắng xóa (hết giờ)
+        const isFinished = (numbers.length > 0 && currentMax === 0) || 
+                           (numbers.length === 0 && lastMax <= 1 && lastMax >= 0);
+
+        if (isFinished) {
+            bufferCount++;
+            
+            // Tính phần trăm thời gian bù giờ đã chạy
+            const progress = Math.min(100, Math.round((bufferCount / REQUIRED_BUFFER_TICKS) * 100));
+            
+            // Chỉ in log mỗi giây (2 tick) để đỡ spam
+            if (bufferCount % 2 === 0) {
+                 console.log(`%c⏳ Đã hết giờ! Đang chờ lưu Server... ${progress}%`, "color: orange; font-style: italic;");
+            }
+
+            // Đủ thời gian bù giờ -> CLICK
+            if (bufferCount >= REQUIRED_BUFFER_TICKS) {
+                doClickNext("Đã lưu Server xong (100%)");
+            }
+        } 
+        else {
+            // Nếu chưa hết giờ, luôn giữ bộ đếm ở 0
+            bufferCount = 0;
+        }
+
         captured.clear();
 
     }, CHECK_INTERVAL);
@@ -80,27 +97,21 @@
                     document.querySelector('a.carousel-control-next');
 
         if (btn) {
-            console.log(`%c[ACTION] ${reason} -> CLICK NEXT!`, "color: white; background: red; font-size: 16px; font-weight: bold; padding: 5px;");
+            console.log(`%c[ACTION] ${reason} -> CLICK NEXT!`, "color: white; background: green; font-size: 16px; font-weight: bold; padding: 5px;");
             
-            // Click đảm bảo
             ['mousedown', 'mouseup', 'click'].forEach(type => {
                 btn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
             });
 
-            // Chế độ chờ
             hasClicked = true;
-            console.log(`[Sleep] Đang chờ ${COOLDOWN_TIME/1000}s để tải bài mới...`);
-
-            // Reset sau 8 giây
+            bufferCount = 0; // Reset
+            
+            console.log(`[Sleep] Đang chờ ${COOLDOWN_TIME/1000}s tải bài mới...`);
             setTimeout(() => {
                 hasClicked = false;
-                lastMax = 99; // Reset số để log lại từ đầu
-                console.log("%c[Ready] Sẵn sàng bài tiếp theo!", "color: cyan; font-weight: bold;");
+                lastMax = 99;
+                console.log("%c[Ready] Sẵn sàng bài tiếp theo!", "color: cyan;");
             }, COOLDOWN_TIME);
-
-        } else {
-            // Nếu hết giờ mà chưa thấy nút (do mạng lag), nó sẽ không in log lỗi liên tục
-            // mà sẽ đợi vòng lặp sau tìm tiếp.
         }
     }
 
