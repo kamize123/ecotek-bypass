@@ -1,0 +1,107 @@
+// ==UserScript==
+// @name         Auto Next Slide Eco-Tek (v13.1 Log Master)
+// @namespace    http://tampermonkey.net/
+// @version      13.1
+// @description  Tự động học: In log thời gian chi tiết & Click khi về 00:00.
+// @author       Jason & Gemini
+// @match        https://hoclythuyetlaixe.eco-tek.com.vn/*
+// @match        http://hoclythuyetlaixe.eco-tek.com.vn/*
+// @run-at       document-start
+// @grant        none
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // --- CẤU HÌNH ---
+    const CHECK_INTERVAL = 500;   // Kiểm tra mỗi 0.5 giây
+    const COOLDOWN_TIME = 8000;   // Sau khi click, ngủ 8 giây
+
+    // BIẾN NỘI BỘ
+    let captured = new Set();
+    let hasClicked = false;
+    let lastMax = 99; // Dùng để kiểm tra thay đổi giây
+
+    // 1. HOOK CANVAS (Chạy ngay lập tức để bắt chữ)
+    const originalFillText = CanvasRenderingContext2D.prototype.fillText;
+    CanvasRenderingContext2D.prototype.fillText = function(text, x, y, maxWidth) {
+        if (text && text.toString().trim() !== "") {
+            captured.add(text);
+        }
+        return originalFillText.apply(this, arguments);
+    };
+
+    console.log("%c[Auto-Next] Đã khởi động! Mở Console để xem giờ chạy...", "color: #00ff00; font-weight: bold; font-size: 14px; padding: 5px; border: 1px solid #00ff00;");
+
+    // 2. VÒNG LẶP CHÍNH
+    setInterval(() => {
+        // Nếu đang nghỉ ngơi (đã click xong) thì bỏ qua
+        if (hasClicked) return;
+
+        // Lọc lấy số từ dữ liệu bắt được
+        const numbers = Array.from(captured)
+            .filter(v => !isNaN(v) && v.toString().trim() !== '')
+            .map(v => parseInt(v, 10));
+
+        // Tìm số lớn nhất (Max)
+        // Nếu màn hình trắng trơn (không có số) thì Max = 0
+        const currentMax = numbers.length > 0 ? Math.max(...numbers) : 0;
+
+        // --- PHẦN IN LOG THỜI GIAN (Yêu cầu của bạn) ---
+        // Chỉ in khi thời gian thay đổi (để không spam 1000 dòng giống nhau)
+        if (numbers.length > 0 && currentMax !== lastMax) {
+            console.log(`⏱️ Time: ${numbers.join(" : ")} (Max: ${currentMax})`);
+            lastMax = currentMax; // Cập nhật trạng thái
+        }
+        // -----------------------------------------------
+
+        // --- LOGIC CLICK ---
+        
+        // TRƯỜNG HỢP 1: Về đích chuẩn (Thấy số 0 và Max = 0)
+        if (numbers.length > 0 && currentMax === 0) {
+            doClickNext("Đã về 00:00");
+        }
+        
+        // TRƯỜNG HỢP 2: Số biến mất (00:01 -> Trắng xóa)
+        // Logic: Vừa nãy còn thấy số nhỏ (<=1), giờ không thấy số nào nữa -> Hết giờ
+        else if (numbers.length === 0 && lastMax <= 1 && lastMax >= 0) {
+            doClickNext("Màn hình xóa trắng (Hết giờ)");
+        }
+
+        // Dọn dẹp bộ nhớ đệm cho vòng lặp sau
+        captured.clear();
+
+    }, CHECK_INTERVAL);
+
+    // 3. HÀM CLICK
+    function doClickNext(reason) {
+        const btn = document.getElementById('next-slide-button') || 
+                    document.querySelector('.o_next_slide_button') ||
+                    document.querySelector('a.carousel-control-next');
+
+        if (btn) {
+            console.log(`%c[ACTION] ${reason} -> CLICK NEXT!`, "color: white; background: red; font-size: 16px; font-weight: bold; padding: 5px;");
+            
+            // Click đảm bảo
+            ['mousedown', 'mouseup', 'click'].forEach(type => {
+                btn.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+            });
+
+            // Chế độ chờ
+            hasClicked = true;
+            console.log(`[Sleep] Đang chờ ${COOLDOWN_TIME/1000}s để tải bài mới...`);
+
+            // Reset sau 8 giây
+            setTimeout(() => {
+                hasClicked = false;
+                lastMax = 99; // Reset số để log lại từ đầu
+                console.log("%c[Ready] Sẵn sàng bài tiếp theo!", "color: cyan; font-weight: bold;");
+            }, COOLDOWN_TIME);
+
+        } else {
+            // Nếu hết giờ mà chưa thấy nút (do mạng lag), nó sẽ không in log lỗi liên tục
+            // mà sẽ đợi vòng lặp sau tìm tiếp.
+        }
+    }
+
+})();
